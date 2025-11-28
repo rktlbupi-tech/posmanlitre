@@ -24,7 +24,7 @@ interface SidebarProps {
 const CollectionTreeItem: React.FC<{
     item: Collection;
     level?: number;
-    onLoadRequest: (req: ApiRequest) => void;
+    onLoadRequest: (req: ApiRequest, preserveId?: boolean) => void;
     onDeleteCollection: (id: string) => void;
     onShareCollection: (col: Collection) => void;
     onAddFolder?: (colId: string, parentId: string | undefined, name: string) => void;

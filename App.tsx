@@ -4,6 +4,8 @@ import { Button, Input, Select, Badge } from './components/UI';
 import { KeyValueEditor } from './components/KeyValueEditor';
 import { generateCurl, generateFetch } from './utils/codeGen';
 import { ApiRequest, ApiResponse, Collection, KeyValueItem, Tab, ResponseTab, RequestTab, Environment } from './types';
+import JsonViewer from './components/JsonViewer';
+import JsonEditor from './components/JsonEditor';
 import { Send, Save, Download, Copy, Code, Sun, Moon, Menu, AlertCircle, LogIn, LogOut, User as UserIcon, Plus, Settings } from 'lucide-react';
 import { ShareModal } from './components/ShareModal';
 import { ImportModal } from './components/ImportModal';
@@ -90,6 +92,18 @@ function App() {
 
   const updateActiveRequest = (updates: Partial<ApiRequest>) => {
     updateActiveTab(prev => ({ request: { ...prev.request, ...updates } }));
+  };
+
+  const handleFormatBody = () => {
+    try {
+      if (activeRequest.body.type === 'json' && activeRequest.body.raw) {
+        const parsed = JSON.parse(activeRequest.body.raw);
+        const formatted = JSON.stringify(parsed, null, 2);
+        updateActiveRequest({ body: { ...activeRequest.body, raw: formatted } });
+      }
+    } catch (e) {
+      alert('Invalid JSON: ' + (e as Error).message);
+    }
   };
 
   const closeTab = (id: string) => {
@@ -781,14 +795,23 @@ function App() {
                     <input type="radio" checked={activeRequest.body.type === 'json'} onChange={() => updateActiveRequest({ body: { ...activeRequest.body, type: 'json' } })} />
                     JSON
                   </label>
+                  {activeRequest.body.type === 'json' && (
+                    <button
+                      onClick={handleFormatBody}
+                      className="ml-auto text-xs bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300"
+                    >
+                      Format JSON
+                    </button>
+                  )}
                 </div>
                 {activeRequest.body.type === 'json' && (
-                  <textarea
-                    className="flex-1 w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-2 font-mono text-xs focus:outline-none resize-none"
-                    value={activeRequest.body.raw}
-                    onChange={(e) => updateActiveRequest({ body: { ...activeRequest.body, raw: e.target.value } })}
-                    placeholder="{ 'key': 'value' }"
-                  />
+                  <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded overflow-hidden">
+                    <JsonEditor
+                      value={activeRequest.body.raw || ''}
+                      onChange={(val) => updateActiveRequest({ body: { ...activeRequest.body, raw: val } })}
+                      isDark={darkMode}
+                    />
+                  </div>
                 )}
                 {activeRequest.body.type === 'none' && (
                   <div className="flex items-center justify-center h-full text-slate-400 text-sm italic">This request has no body</div>
@@ -851,9 +874,13 @@ function App() {
               {/* Response Content */}
               <div className="flex-1 overflow-auto p-4 font-mono text-sm relative">
                 {activeResponseTab === 'body' && (
-                  <pre className="whitespace-pre-wrap break-words text-slate-800 dark:text-slate-200">
-                    {typeof activeResponse.data === 'object' ? JSON.stringify(activeResponse.data, null, 2) : activeResponse.data}
-                  </pre>
+                  <div className="h-full overflow-auto text-slate-800 dark:text-slate-200">
+                    {typeof activeResponse.data === 'object' ? (
+                      <JsonViewer data={activeResponse.data} isDark={darkMode} />
+                    ) : (
+                      <pre className="whitespace-pre-wrap break-words p-4">{activeResponse.data}</pre>
+                    )}
+                  </div>
                 )}
                 {activeResponseTab === 'headers' && (
                   <div className="grid grid-cols-[1fr_2fr] gap-x-4 gap-y-1 text-xs">
