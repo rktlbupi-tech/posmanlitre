@@ -6,6 +6,7 @@ import { generateCurl, generateFetch } from './utils/codeGen';
 import { ApiRequest, ApiResponse, Collection, KeyValueItem, Tab, ResponseTab, RequestTab, Environment } from './types';
 import JsonViewer from './components/JsonViewer';
 import CodeEditor from './components/CodeEditor';
+import VariableInput from './components/VariableInput';
 import { Send, Save, Download, Copy, Code, Sun, Moon, Menu, AlertCircle, LogIn, LogOut, User as UserIcon, Plus, Settings } from 'lucide-react';
 import { ShareModal } from './components/ShareModal';
 import { ImportModal } from './components/ImportModal';
@@ -733,8 +734,6 @@ function App() {
         onRenameCollection={handleRenameCollection}
         onRenameFolder={handleRenameFolder}
         onRenameRequest={handleRenameRequest}
-        onRenameFolder={handleRenameFolder}
-        onRenameRequest={handleRenameRequest}
         onDuplicateRequest={handleDuplicateRequest}
       />
 
@@ -810,10 +809,13 @@ function App() {
                     />
                   </div>
                   <div className="flex-1">
-                    <Input
+                    <VariableInput
                       placeholder="Enter URL or paste text"
                       value={activeRequest.url}
-                      onChange={(e) => updateActiveRequest({ url: e.target.value })}
+                      onChange={(val) => updateActiveRequest({ url: val })}
+                      variables={environments.find(e => e.id === activeEnvironmentId)?.variables || []}
+                      isDark={darkMode}
+                      className="w-full"
                     />
                   </div>
                   <Button onClick={handleSend} disabled={isLoading} className="w-24">
