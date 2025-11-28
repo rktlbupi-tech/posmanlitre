@@ -5,7 +5,7 @@ import { KeyValueEditor } from './components/KeyValueEditor';
 import { generateCurl, generateFetch } from './utils/codeGen';
 import { ApiRequest, ApiResponse, Collection, KeyValueItem, Tab, ResponseTab, RequestTab, Environment } from './types';
 import JsonViewer from './components/JsonViewer';
-import JsonEditor from './components/JsonEditor';
+import CodeEditor from './components/CodeEditor';
 import { Send, Save, Download, Copy, Code, Sun, Moon, Menu, AlertCircle, LogIn, LogOut, User as UserIcon, Plus, Settings } from 'lucide-react';
 import { ShareModal } from './components/ShareModal';
 import { ImportModal } from './components/ImportModal';
@@ -16,6 +16,7 @@ import { EnvironmentManager } from './components/EnvironmentManager';
 import { auth } from './firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { FirestoreService } from './services/firestore';
+import { ResizableSplitPane } from './components/ResizableSplitPane';
 
 const DEFAULT_REQUEST: ApiRequest = {
   id: '',
@@ -26,6 +27,7 @@ const DEFAULT_REQUEST: ApiRequest = {
   headers: [{ id: '1', key: 'Accept', value: '*/*', enabled: true }],
   auth: { type: 'none' },
   body: { type: 'none', raw: '' },
+  postRequestScript: '',
 };
 
 function App() {
@@ -47,7 +49,16 @@ function App() {
   const [history, setHistory] = useState<ApiRequest[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('postman_theme');
+      if (saved) {
+        return saved === 'dark';
+      }
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
   const [showCode, setShowCode] = useState(false);
 
   // Share/Import State
@@ -191,19 +202,15 @@ function App() {
   }, []);
 
   // Theme check
-  // useEffect(() => {
-  //   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-  //     setDarkMode(true);
-  //   }
-  //   const params = new URLSearchParams(window.location.search);
-  //   const shareId = params.get('share_id');
-  //   if (shareId) {
-  //     setPendingShareId(shareId);
-  //     setImportModalOpen(true);
-  //     window.history.replaceState({}, '', window.location.pathname);
-  //   }
-  // }
-  // }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shareId = params.get('share_id');
+    if (shareId) {
+      setPendingShareId(shareId);
+      setImportModalOpen(true);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   // Dark Mode Effect
   useEffect(() => {
@@ -212,6 +219,7 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark');
     }
+    localStorage.setItem('postman_theme', darkMode ? 'dark' : 'light');
   }, [darkMode]);
 
   // Save to local storage (Guest mode only)
@@ -362,6 +370,60 @@ function App() {
 
       updateActiveTab({ response: apiResponse, loading: false });
       addToHistory({ ...activeRequest, url: urlObj.toString() });
+
+      // Execute Post-Request Script
+      if (activeRequest.postRequestScript && activeRequest.postRequestScript.trim()) {
+        try {
+          const script = activeRequest.postRequestScript;
+          const env = {
+            set: (key: string, value: string) => {
+              // We need to update the environment state
+              // This is tricky because we are inside an async function and state updates might not be immediate or we might not have latest state if not careful.
+              // But we can use setEnvironments with functional update.
+              setEnvironments(prevEnvs => {
+                if (!activeEnvironmentId) return prevEnvs;
+                return prevEnvs.map(e => {
+                  if (e.id === activeEnvironmentId) {
+                    const existingVarIndex = e.variables.findIndex(v => v.key === key);
+                    let newVars = [...e.variables];
+                    if (existingVarIndex >= 0) {
+                      newVars[existingVarIndex] = { ...newVars[existingVarIndex], value: String(value), enabled: true };
+                    } else {
+                      newVars.push({ id: crypto.randomUUID(), key, value: String(value), enabled: true });
+                    }
+                    const updatedEnv = { ...e, variables: newVars };
+                    if (user) FirestoreService.saveEnvironment(user.uid, updatedEnv);
+                    return updatedEnv;
+                  }
+                  return e;
+                });
+              });
+            },
+            get: (key: string) => {
+              const env = environments.find(e => e.id === activeEnvironmentId);
+              return env?.variables.find(v => v.key === key)?.value;
+            }
+          };
+
+          const pm = {
+            environment: env,
+            response: {
+              json: () => data,
+              text: () => typeof data === 'string' ? data : JSON.stringify(data),
+              headers: resHeaders,
+              status: res.status
+            }
+          };
+
+          // Safe-ish execution
+          const func = new Function('pm', 'response', script);
+          func(pm, pm.response);
+
+        } catch (scriptError: any) {
+          console.error("Script Execution Error:", scriptError);
+          alert("Script Error: " + scriptError.message);
+        }
+      }
 
     } catch (error: any) {
       updateActiveTab({
@@ -583,6 +645,34 @@ function App() {
     }));
   };
 
+
+  const handleDuplicateRequest = (collectionId: string, requestId: string) => {
+    setCollections(prev => prev.map(col => {
+      if (col.id === collectionId) {
+        const duplicateInCollection = (c: Collection): Collection => {
+          const reqIndex = c.requests.findIndex(r => r.id === requestId);
+          if (reqIndex !== -1) {
+            const originalReq = c.requests[reqIndex];
+            const newReq: ApiRequest = {
+              ...originalReq,
+              id: crypto.randomUUID(),
+              name: originalReq.name + ' Copy'
+            };
+            const newRequests = [...c.requests];
+            newRequests.splice(reqIndex + 1, 0, newReq);
+            return { ...c, requests: newRequests };
+          }
+          if (c.folders) return { ...c, folders: c.folders.map(duplicateInCollection) };
+          return c;
+        };
+        const updated = duplicateInCollection(col);
+        if (user) FirestoreService.saveCollection(user.uid, updated);
+        return updated;
+      }
+      return col;
+    }));
+  };
+
   // Environment Handlers
   const handleCreateEnvironment = (name: string) => {
     const newEnv: Environment = { id: crypto.randomUUID(), name, variables: [] };
@@ -643,6 +733,9 @@ function App() {
         onRenameCollection={handleRenameCollection}
         onRenameFolder={handleRenameFolder}
         onRenameRequest={handleRenameRequest}
+        onRenameFolder={handleRenameFolder}
+        onRenameRequest={handleRenameRequest}
+        onDuplicateRequest={handleDuplicateRequest}
       />
 
       {/* Main Content */}
@@ -690,6 +783,7 @@ function App() {
                 <LogIn size={14} className="mr-2" /> Login
               </Button>
             )}
+
           </div>
         </header>
 
@@ -702,237 +796,257 @@ function App() {
           onNewTab={() => createNewTab()}
         />
 
-        {/* Request Builder Section */}
-        <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
-          {/* URL Bar */}
-          <div className="flex gap-2 mb-4">
-            <div className="w-32 shrink-0">
-              <Select
-                value={activeRequest.method}
-                onChange={(val) => updateActiveRequest({ method: val as any })}
-                options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(m => ({ label: m, value: m }))}
-              />
-            </div>
-            <div className="flex-1">
-              <Input
-                placeholder="Enter URL or paste text"
-                value={activeRequest.url}
-                onChange={(e) => updateActiveRequest({ url: e.target.value })}
-              />
-            </div>
-            <Button onClick={handleSend} disabled={isLoading} className="w-24">
-              {isLoading ? 'Sending...' : <><Send size={16} className="mr-2" /> Send</>}
-            </Button>
-          </div>
-
-          {/* Tabs */}
-          <div className="flex border-b border-slate-200 dark:border-slate-800 mb-4">
-            {['params', 'headers', 'auth', 'body'].map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTabSection(tab as Tab)}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTabSection === tab
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                  }`}
-              >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                {tab === 'params' && activeRequest.params.filter(p => p.enabled && p.key).length > 0 && <span className="ml-1 text-[10px] text-primary">●</span>}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab Content */}
-          <div className="h-48 overflow-y-auto">
-            {activeTabSection === 'params' && (
-              <KeyValueEditor items={activeRequest.params} onChange={handleParamsChange} />
-            )}
-            {activeTabSection === 'headers' && (
-              <KeyValueEditor items={activeRequest.headers} onChange={(items) => updateActiveRequest({ headers: items })} />
-            )}
-            {activeTabSection === 'auth' && (
-              <div className="p-4 space-y-4 max-w-md">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Auth Type</label>
-                  <Select
-                    value={activeRequest.auth.type}
-                    onChange={(val) => updateActiveRequest({ auth: { ...activeRequest.auth, type: val as any } })}
-                    options={[{ label: 'No Auth', value: 'none' }, { label: 'Bearer Token', value: 'bearer' }, { label: 'Basic Auth', value: 'basic' }]}
-                  />
-                </div>
-                {activeRequest.auth.type === 'bearer' && (
-                  <Input
-                    placeholder="Token"
-                    value={activeRequest.auth.token || ''}
-                    onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, token: e.target.value } })}
-                  />
-                )}
-                {activeRequest.auth.type === 'basic' && (
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Username"
-                      value={activeRequest.auth.username || ''}
-                      onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, username: e.target.value } })}
-                    />
-                    <Input
-                      placeholder="Password"
-                      type="password"
-                      value={activeRequest.auth.password || ''}
-                      onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, password: e.target.value } })}
+        <div className="flex-1 min-h-0 relative">
+          <ResizableSplitPane
+            top={
+              <div className="h-full flex flex-col p-4 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
+                {/* URL Bar */}
+                <div className="flex gap-2 mb-4 shrink-0">
+                  <div className="w-32 shrink-0">
+                    <Select
+                      value={activeRequest.method}
+                      onChange={(val) => updateActiveRequest({ method: val as any })}
+                      options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(m => ({ label: m, value: m }))}
                     />
                   </div>
-                )}
-              </div>
-            )}
-            {activeTabSection === 'body' && (
-              <div className="h-full flex flex-col">
-                <div className="flex gap-4 mb-2 px-1">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input type="radio" checked={activeRequest.body.type === 'none'} onChange={() => updateActiveRequest({ body: { ...activeRequest.body, type: 'none' } })} />
-                    None
-                  </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input type="radio" checked={activeRequest.body.type === 'json'} onChange={() => updateActiveRequest({ body: { ...activeRequest.body, type: 'json' } })} />
-                    JSON
-                  </label>
-                  {activeRequest.body.type === 'json' && (
-                    <button
-                      onClick={handleFormatBody}
-                      className="ml-auto text-xs bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300"
-                    >
-                      Format JSON
-                    </button>
-                  )}
-                </div>
-                {activeRequest.body.type === 'json' && (
-                  <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded overflow-hidden">
-                    <JsonEditor
-                      value={activeRequest.body.raw || ''}
-                      onChange={(val) => updateActiveRequest({ body: { ...activeRequest.body, raw: val } })}
-                      isDark={darkMode}
+                  <div className="flex-1">
+                    <Input
+                      placeholder="Enter URL or paste text"
+                      value={activeRequest.url}
+                      onChange={(e) => updateActiveRequest({ url: e.target.value })}
                     />
                   </div>
-                )}
-                {activeRequest.body.type === 'none' && (
-                  <div className="flex items-center justify-center h-full text-slate-400 text-sm italic">This request has no body</div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Response Section */}
-        <div className="flex-1 bg-white dark:bg-slate-950 flex flex-col min-h-0 overflow-hidden relative">
-          {!activeResponse && !isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center flex-col text-slate-300 dark:text-slate-700">
-              <Send size={48} className="mb-4 opacity-50" />
-              <p className="text-lg font-medium">Enter URL and click Send</p>
-            </div>
-          )}
-
-          {isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-slate-950/50 z-10 backdrop-blur-sm">
-              <div className="flex flex-col items-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-2"></div>
-                <span className="text-sm font-medium">Sending Request...</span>
-              </div>
-            </div>
-          )}
-
-          {activeResponse && (
-            <>
-              {/* Response Header */}
-              <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
-                <div className="flex items-center gap-4">
-                  {renderResponseStatus(activeResponse.status)}
-                  <span className="text-xs text-slate-500">Time: <span className="font-semibold text-slate-700 dark:text-slate-300">{activeResponse.time}ms</span></span>
-                  <span className="text-xs text-slate-500">Size: <span className="font-semibold text-slate-700 dark:text-slate-300">{(activeResponse.size / 1024).toFixed(2)} KB</span></span>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => copyToClipboard(typeof activeResponse.data === 'object' ? JSON.stringify(activeResponse.data, null, 2) : activeResponse.data)}>
-                    <Copy size={14} />
+                  <Button onClick={handleSend} disabled={isLoading} className="w-24">
+                    {isLoading ? 'Sending...' : <><Send size={16} className="mr-2" /> Send</>}
                   </Button>
                 </div>
-              </div>
 
-              {/* Response Tabs */}
-              <div className="flex border-b border-slate-200 dark:border-slate-800">
-                {['body', 'headers'].map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveResponseTab(tab as ResponseTab)}
-                    className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${activeResponseTab === tab
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                      }`}
-                  >
-                    {tab.toUpperCase()}
-                  </button>
-                ))}
-              </div>
+                {/* Tabs */}
+                <div className="flex border-b border-slate-200 dark:border-slate-800 mb-4">
+                  {['params', 'headers', 'auth', 'body', 'scripts'].map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTabSection(tab as Tab)}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTabSection === tab
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                        }`}
+                    >
+                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      {tab === 'params' && activeRequest.params.filter(p => p.enabled && p.key).length > 0 && <span className="ml-1 text-[10px] text-primary">●</span>}
+                    </button>
+                  ))}
+                </div>
 
-              {/* Response Content */}
-              <div className="flex-1 overflow-auto p-4 font-mono text-sm relative">
-                {activeResponseTab === 'body' && (
-                  <div className="h-full overflow-auto text-slate-800 dark:text-slate-200">
-                    {typeof activeResponse.data === 'object' ? (
-                      <JsonViewer data={activeResponse.data} isDark={darkMode} />
-                    ) : (
-                      <pre className="whitespace-pre-wrap break-words p-4">{activeResponse.data}</pre>
-                    )}
-                  </div>
-                )}
-                {activeResponseTab === 'headers' && (
-                  <div className="grid grid-cols-[1fr_2fr] gap-x-4 gap-y-1 text-xs">
-                    {Object.entries(activeResponse.headers).map(([k, v]) => (
-                      <React.Fragment key={k}>
-                        <div className="font-semibold text-slate-600 dark:text-slate-400">{k}</div>
-                        <div className="text-slate-800 dark:text-slate-200 break-all">{v}</div>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                )}
-                {activeResponse.error && activeResponseTab === 'body' && (
-                  <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded text-red-700 dark:text-red-300 text-sm">
-                    <div className="flex items-center gap-2 font-bold mb-1">
-                      <AlertCircle size={16} /> Error
+                {/* Tab Content */}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {activeTabSection === 'params' && (
+                    <KeyValueEditor items={activeRequest.params} onChange={handleParamsChange} />
+                  )}
+                  {activeTabSection === 'headers' && (
+                    <KeyValueEditor items={activeRequest.headers} onChange={(items) => updateActiveRequest({ headers: items })} />
+                  )}
+                  {activeTabSection === 'auth' && (
+                    <div className="p-4 space-y-4 max-w-md">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Auth Type</label>
+                        <Select
+                          value={activeRequest.auth.type}
+                          onChange={(val) => updateActiveRequest({ auth: { ...activeRequest.auth, type: val as any } })}
+                          options={[{ label: 'No Auth', value: 'none' }, { label: 'Bearer Token', value: 'bearer' }, { label: 'Basic Auth', value: 'basic' }]}
+                        />
+                      </div>
+                      {activeRequest.auth.type === 'bearer' && (
+                        <Input
+                          placeholder="Token"
+                          value={activeRequest.auth.token || ''}
+                          onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, token: e.target.value } })}
+                        />
+                      )}
+                      {activeRequest.auth.type === 'basic' && (
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Username"
+                            value={activeRequest.auth.username || ''}
+                            onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, username: e.target.value } })}
+                          />
+                          <Input
+                            placeholder="Password"
+                            type="password"
+                            value={activeRequest.auth.password || ''}
+                            onChange={(e) => updateActiveRequest({ auth: { ...activeRequest.auth, password: e.target.value } })}
+                          />
+                        </div>
+                      )}
                     </div>
-                    {activeResponse.data.hint || activeResponse.error}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Code Snippet Modal (Simplified as Overlay) */}
-      {showCode && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-800">
-              <h3 className="font-bold">Code Snippets</h3>
-              <button onClick={() => setShowCode(false)} className="text-slate-500 hover:text-slate-900">&times;</button>
-            </div>
-            <div className="p-4 overflow-auto flex-1 space-y-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">cURL</h4>
-                <div className="bg-slate-100 dark:bg-slate-950 p-3 rounded text-xs font-mono overflow-x-auto relative group">
-                  <pre>{generateCurl(activeRequest)}</pre>
-                  <button onClick={() => copyToClipboard(generateCurl(activeRequest))} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 bg-white dark:bg-slate-800 rounded shadow"><Copy size={12} /></button>
+                  )}
+                  {activeTabSection === 'body' && (
+                    <div className="h-full flex flex-col">
+                      <div className="flex gap-4 mb-2 px-1 shrink-0">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input type="radio" checked={activeRequest.body.type === 'none'} onChange={() => updateActiveRequest({ body: { ...activeRequest.body, type: 'none' } })} />
+                          None
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input type="radio" checked={activeRequest.body.type === 'json'} onChange={() => updateActiveRequest({ body: { ...activeRequest.body, type: 'json' } })} />
+                          JSON
+                        </label>
+                        {activeRequest.body.type === 'json' && (
+                          <button
+                            onClick={handleFormatBody}
+                            className="ml-auto text-xs bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300"
+                          >
+                            Format JSON
+                          </button>
+                        )}
+                      </div>
+                      {activeRequest.body.type === 'json' && (
+                        <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded overflow-hidden min-h-0">
+                          <CodeEditor
+                            value={activeRequest.body.raw || ''}
+                            onChange={(val) => updateActiveRequest({ body: { ...activeRequest.body, raw: val } })}
+                            isDark={darkMode}
+                            language="json"
+                          />
+                        </div>
+                      )}
+                      {activeRequest.body.type === 'none' && (
+                        <div className="flex items-center justify-center h-full text-slate-400 text-sm italic">This request has no body</div>
+                      )}
+                    </div>
+                  )}
+                  {activeTabSection === 'scripts' && (
+                    <div className="h-full flex flex-col">
+                      <div className="flex-1 border border-slate-200 dark:border-slate-800 rounded overflow-hidden min-h-0">
+                        <CodeEditor
+                          value={activeRequest.postRequestScript || ''}
+                          onChange={(val) => updateActiveRequest({ postRequestScript: val })}
+                          isDark={darkMode}
+                          language="javascript"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">JavaScript (Fetch)</h4>
-                <div className="bg-slate-100 dark:bg-slate-950 p-3 rounded text-xs font-mono overflow-x-auto relative group">
-                  <pre>{generateFetch(activeRequest)}</pre>
-                  <button onClick={() => copyToClipboard(generateFetch(activeRequest))} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 bg-white dark:bg-slate-800 rounded shadow"><Copy size={12} /></button>
+            }
+            bottom={
+              <div className="h-full flex flex-col bg-white dark:bg-slate-950 min-h-0 overflow-hidden relative">
+                {!activeResponse && !isLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center flex-col text-slate-300 dark:text-slate-700">
+                    <Send size={48} className="mb-4 opacity-50" />
+                    <p className="text-lg font-medium">Enter URL and click Send</p>
+                  </div>
+                )}
+
+                {isLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-slate-950/50 z-10 backdrop-blur-sm">
+                    <div className="flex flex-col items-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-2"></div>
+                      <span className="text-sm font-medium">Sending Request...</span>
+                    </div>
+                  </div>
+                )}
+
+                {activeResponse && (
+                  <>
+                    {/* Response Header */}
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0">
+                      <div className="flex items-center gap-4">
+                        {renderResponseStatus(activeResponse.status)}
+                        <span className="text-xs text-slate-500">Time: <span className="font-semibold text-slate-700 dark:text-slate-300">{activeResponse.time}ms</span></span>
+                        <span className="text-xs text-slate-500">Size: <span className="font-semibold text-slate-700 dark:text-slate-300">{(activeResponse.size / 1024).toFixed(2)} KB</span></span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => copyToClipboard(typeof activeResponse.data === 'object' ? JSON.stringify(activeResponse.data, null, 2) : activeResponse.data)}>
+                          <Copy size={14} />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Response Tabs */}
+                    <div className="flex border-b border-slate-200 dark:border-slate-800 shrink-0">
+                      {['body', 'headers'].map((tab) => (
+                        <button
+                          key={tab}
+                          onClick={() => setActiveResponseTab(tab as ResponseTab)}
+                          className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${activeResponseTab === tab
+                            ? 'border-primary text-primary'
+                            : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                            }`}
+                        >
+                          {tab.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Response Content */}
+                    <div className="flex-1 overflow-auto p-4 font-mono text-sm relative min-h-0">
+                      {activeResponseTab === 'body' && (
+                        <div className="h-full overflow-auto text-slate-800 dark:text-slate-200">
+                          {typeof activeResponse.data === 'object' ? (
+                            <JsonViewer data={activeResponse.data} isDark={darkMode} />
+                          ) : (
+                            <pre className="whitespace-pre-wrap break-words p-4">{activeResponse.data}</pre>
+                          )}
+                        </div>
+                      )}
+                      {activeResponseTab === 'headers' && (
+                        <div className="grid grid-cols-[1fr_2fr] gap-x-4 gap-y-1 text-xs">
+                          {Object.entries(activeResponse.headers).map(([k, v]) => (
+                            <React.Fragment key={k}>
+                              <div className="font-semibold text-slate-600 dark:text-slate-400">{k}</div>
+                              <div className="text-slate-800 dark:text-slate-200 break-all">{v}</div>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
+                      {activeResponse.error && activeResponseTab === 'body' && (
+                        <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded text-red-700 dark:text-red-300 text-sm">
+                          <div className="flex items-center gap-2 font-bold mb-1">
+                            <AlertCircle size={16} /> Error
+                          </div>
+                          {activeResponse.data.hint || activeResponse.error}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            }
+          />
+        </div>
+      </div >
+
+      {/* Code Snippet Modal (Simplified as Overlay) */}
+      {
+        showCode && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+              <div className="flex justify-between items-center p-4 border-b border-slate-200 dark:border-slate-800">
+                <h3 className="font-bold">Code Snippets</h3>
+                <button onClick={() => setShowCode(false)} className="text-slate-500 hover:text-slate-900">&times;</button>
+              </div>
+              <div className="p-4 overflow-auto flex-1 space-y-4">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">cURL</h4>
+                  <div className="bg-slate-100 dark:bg-slate-950 p-3 rounded text-xs font-mono overflow-x-auto relative group">
+                    <pre>{generateCurl(activeRequest)}</pre>
+                    <button onClick={() => copyToClipboard(generateCurl(activeRequest))} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 bg-white dark:bg-slate-800 rounded shadow"><Copy size={12} /></button>
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">JavaScript (Fetch)</h4>
+                  <div className="bg-slate-100 dark:bg-slate-950 p-3 rounded text-xs font-mono overflow-x-auto relative group">
+                    <pre>{generateFetch(activeRequest)}</pre>
+                    <button onClick={() => copyToClipboard(generateFetch(activeRequest))} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 bg-white dark:bg-slate-800 rounded shadow"><Copy size={12} /></button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       <ShareModal
         isOpen={shareModalOpen}
@@ -975,7 +1089,7 @@ function App() {
         onCreateEnvironment={handleCreateEnvironment}
         onDeleteEnvironment={handleDeleteEnvironment}
       />
-    </div>
+    </div >
   );
 }
 

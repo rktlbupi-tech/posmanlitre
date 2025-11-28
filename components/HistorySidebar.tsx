@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { History, Folder, Plus, Trash2, ChevronRight, ChevronDown, Play, Share2, FileText, MoreVertical, Edit2, Check, X, FilePlus } from 'lucide-react';
+import { History, Folder, Plus, Trash2, ChevronRight, ChevronDown, Play, Share2, FileText, MoreVertical, Edit2, Check, X, FilePlus, Copy } from 'lucide-react';
 import { Button, Badge } from './UI';
 import { ApiRequest, Collection } from '../types';
 
@@ -19,6 +19,7 @@ interface SidebarProps {
     onRenameCollection?: (id: string, newName: string) => void;
     onRenameFolder?: (collectionId: string, folderId: string, newName: string) => void;
     onRenameRequest?: (collectionId: string, requestId: string, newName: string) => void;
+    onDuplicateRequest?: (collectionId: string, requestId: string) => void;
 }
 
 const CollectionTreeItem: React.FC<{
@@ -34,8 +35,9 @@ const CollectionTreeItem: React.FC<{
     onRenameCollection?: (id: string, newName: string) => void;
     onRenameFolder?: (colId: string, folderId: string, newName: string) => void;
     onRenameRequest?: (colId: string, reqId: string, newName: string) => void;
+    onDuplicateRequest?: (colId: string, reqId: string) => void;
     rootCollectionId: string;
-}> = ({ item, level = 0, onLoadRequest, onDeleteCollection, onShareCollection, onAddFolder, onAddRequest, onDeleteFolder, onDeleteRequest, onRenameCollection, onRenameFolder, onRenameRequest, rootCollectionId }) => {
+}> = ({ item, level = 0, onLoadRequest, onDeleteCollection, onShareCollection, onAddFolder, onAddRequest, onDeleteFolder, onDeleteRequest, onRenameCollection, onRenameFolder, onRenameRequest, onDuplicateRequest, rootCollectionId }) => {
     const [expanded, setExpanded] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState(item.name);
@@ -229,6 +231,7 @@ const CollectionTreeItem: React.FC<{
                             onRenameCollection={onRenameCollection}
                             onRenameFolder={onRenameFolder}
                             onRenameRequest={onRenameRequest}
+                            onDuplicateRequest={onDuplicateRequest}
                             rootCollectionId={rootCollectionId}
                         />
                     ))}
@@ -241,6 +244,7 @@ const CollectionTreeItem: React.FC<{
                             onLoadRequest={(r) => onLoadRequest(r, true)} // Pass true to preserve ID
                             onDeleteRequest={onDeleteRequest}
                             onRenameRequest={onRenameRequest}
+                            onDuplicateRequest={onDuplicateRequest}
                         />
                     ))}
                     {(!item.folders?.length && !item.requests?.length && !isCreatingFolder && !isCreatingRequest) && (
@@ -259,7 +263,8 @@ const RequestItem: React.FC<{
     onLoadRequest: (req: ApiRequest, preserveId?: boolean) => void;
     onDeleteRequest?: (colId: string, reqId: string) => void;
     onRenameRequest?: (colId: string, reqId: string, newName: string) => void;
-}> = ({ req, level, rootCollectionId, onLoadRequest, onDeleteRequest, onRenameRequest }) => {
+    onDuplicateRequest?: (colId: string, reqId: string) => void;
+}> = ({ req, level, rootCollectionId, onLoadRequest, onDeleteRequest, onRenameRequest, onDuplicateRequest }) => {
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState(req.name || req.url);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +323,9 @@ const RequestItem: React.FC<{
 
             {!isRenaming && (
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); onDuplicateRequest?.(rootCollectionId, req.id); }} className="text-slate-400 hover:text-blue-500" title="Duplicate">
+                        <Copy size={12} />
+                    </button>
                     <button onClick={(e) => { e.stopPropagation(); setIsRenaming(true); }} className="text-slate-400 hover:text-blue-500 shrink-0" title="Rename">
                         <Edit2 size={12} />
                     </button>
@@ -349,7 +357,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onDeleteRequest,
     onRenameCollection,
     onRenameFolder,
-    onRenameRequest
+    onRenameRequest,
+    onDuplicateRequest
 }) => {
     const [isCreatingCollection, setIsCreatingCollection] = useState(false);
     const [newCollectionName, setNewCollectionName] = useState('');
@@ -433,6 +442,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 onRenameCollection={onRenameCollection}
                                 onRenameFolder={onRenameFolder}
                                 onRenameRequest={onRenameRequest}
+                                onDuplicateRequest={onDuplicateRequest}
                                 rootCollectionId={col.id}
                             />
                         ))}

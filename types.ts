@@ -30,6 +30,7 @@ export interface ApiRequest {
   headers: KeyValueItem[];
   auth: AuthConfig;
   body: BodyConfig;
+  postRequestScript?: string;
 }
 
 export interface ApiResponse {
@@ -57,7 +58,7 @@ export interface Environment {
 }
 
 // Helper types for UI
-export type Tab = 'params' | 'headers' | 'auth' | 'body';
+export type Tab = 'params' | 'headers' | 'auth' | 'body' | 'scripts';
 export type ResponseTab = 'body' | 'headers' | 'preview';
 
 export interface RequestTab {
