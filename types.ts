@@ -59,3 +59,13 @@ export interface Environment {
 // Helper types for UI
 export type Tab = 'params' | 'headers' | 'auth' | 'body';
 export type ResponseTab = 'body' | 'headers' | 'preview';
+
+export interface RequestTab {
+  id: string;
+  title: string;
+  request: ApiRequest;
+  response: ApiResponse | null;
+  isDirty: boolean;
+  savedRequestId?: string; // ID of the request in the collection if it's saved
+  loading: boolean;
+}
