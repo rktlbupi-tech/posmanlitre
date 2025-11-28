@@ -177,18 +177,28 @@ function App() {
   }, []);
 
   // Theme check
+  // useEffect(() => {
+  //   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+  //     setDarkMode(true);
+  //   }
+  //   const params = new URLSearchParams(window.location.search);
+  //   const shareId = params.get('share_id');
+  //   if (shareId) {
+  //     setPendingShareId(shareId);
+  //     setImportModalOpen(true);
+  //     window.history.replaceState({}, '', window.location.pathname);
+  //   }
+  // }
+  // }, []);
+
+  // Dark Mode Effect
   useEffect(() => {
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setDarkMode(true);
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
     }
-    const params = new URLSearchParams(window.location.search);
-    const shareId = params.get('share_id');
-    if (shareId) {
-      setPendingShareId(shareId);
-      setImportModalOpen(true);
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }, []);
+  }, [darkMode]);
 
   // Save to local storage (Guest mode only)
   useEffect(() => {
